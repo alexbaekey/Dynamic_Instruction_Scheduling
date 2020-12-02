@@ -11,6 +11,7 @@
 //2b6424 2 14 29 -1
 //2b6428 2 15 29 -1
 
+// TODO get rid of node_copy, just do it in place
 
 
 
@@ -122,7 +123,7 @@ void node_copy(node *, node *);
 void reg_initialize(reg_file *, int i);
 void instruction_initialize(instruction *);
 void time_initialize(time *);
-
+void swap(node *, node*);
 
 
 
@@ -341,13 +342,156 @@ void fakeRetire(){
 
 void execute(){
 //part of issue/execute pipeline
-;
+
+     node *A; 
+     node *B; 
+     node *temp;
+     A = executeList->next_node;
+     while(A != executeList){
+          A->latency--;
+          temp=fakeROB;
+          while(temp!=fakeROB){
+               if(temp->tag==A->tag){
+                    temp->latency--;
+                    break;
+               }
+               temp=temp->next_node;
+          }
+          A=A->next_node;
+          
+     }
+     
+     A=executeList->next_node;
+     B=NULL;
+     while(A!=executeList){
+          if(A->op==0){
+               temp=fakeROB->next_node;
+               while(temp!=fakeROB){
+                    if(temp->tag==A->tag){
+                         temp->stage=WB;
+                         if(temp->op==1){
+                              timeList[temp->tag].execute_length=1;
+                         }
+                         else if(temp->op==2){
+                              timeList[temp->tag].execute_length=2;
+                         }
+                         else if(temp->op==5){
+                              timeList[temp->tag].execute_length=5;
+                         }
+                    }
+                    temp = temp->next_node;
+               }
+               if(!B){
+                    executeList->next_node=A->next_node;
+               }
+               else{
+                    B->next_node=A->next_node;
+               }
+               
+               if(regfile[A->regdest].rdy == 0 && regfile[A->regdest].tag == A->tag){
+                    regfile[A->regdest].rdy=1;
+                    regfile[A->regdest].tag=A->regdest;
+               }
+               temp=issueList->next_node;
+               while(temp!=issueList){
+                    if(temp->rdy1==0 && (temp->valreg1==A->tag)){
+                         temp->rdy1=1;
+                         temp->valreg1=regfile[A->regdest].tag;
+                    }
+                    else if(temp->rdy2==0 && (temp->valreg2==A->tag)){
+                         temp->rdy2=1;
+                         temp->valreg2 = regfile[A->regdest].tag;
+                    }
+                    temp=temp->next_node;
+               }
+               A=A->next_node;
+               continue;
+          }
+          B=A;
+          A=A->next_node;
+     }              
 }
 
 void issue(){
 //part of issue/execute pipeline
-;
+
+     int c=0;
+     //temp
+     int ct=0;   
+
+     node *tempList;
+     node *A;
+     node *B;
+     node *temp;
+
+     tempList = (node *)malloc(sizeof(node) * IScount);
+     for(c=0;c<IScount;c++)
+          node_initialize(&tempList[c]);
+     temp = issueList->next_node;
+     for(c=0;c<IScount;c++){
+          if(temp->stage==IS && temp->rdy1==1 && temp->rdy2==1){
+               node_copy(&tempList[ct],temp);
+               ct++;
+          }
+          temp=temp->next_node;
+     }
+
+     //sort temp list (bubble sort)
+
+     int i=0;
+     int j=0;
+
+     for(i=0;i<ct-1;i++){
+          for(j=0;j<ct-i-1;j++){
+               if(tempList[j].tag>tempList[j+1].tag){
+                    swap(&tempList[j],&tempList[j+1]);
+               }
+          }
+     }
+     c=0;
+     EXcount=0;
+     while(i<ct && EXcount<N){
+          A=issueList->next_node;
+          B=NULL;
+          while(A!=issueList){
+               if(A->tag==tempList[c].tag){
+                    if(!B)
+                         issueList->next_node=A->next_node;
+                    else
+                         B->next_node=A->next_node;
+                    break;
+               }
+               B=A;
+               A=A->next_node;
+          }
+          temp=executeList;
+          while(temp->next_node!=executeList)
+               temp=temp->next_node;
+          temp->next_node=A;
+          A->next_node=executeList;
+          EXcount++;
+          IScount--;
+          A->stage=EX;
+          temp=fakeROB->next_node;
+          while(temp!=fakeROB){
+               if(temp->tag==A->tag){
+                    temp->stage=EX;
+                    break;
+               }
+               temp = temp->next_node;
+          }
+          timeList[A->tag].issue_length=clock-timeList[A->tag].issue_start;
+          timeList[A->tag].execute_start=clock;
+          c++;
+     }
+     free(tempList);
 }
+       
+
+
+
+
+
 
 void dispatch(){
 //part of fetch/dispatch pipeline
@@ -379,28 +523,28 @@ void fetch(instruction *instruct){
      temp->next_node=cur;
      cur->next_node=fakeROB;
 
-     node *cur, *temp;
-     cur = (node *)malloc(sizeof(node));
-     cur->op        = instruct->op;
-     cur->pc        = instruct->pc;
-     cur->reg1      = instruct->reg1;
-     cur->reg2      = instruct->reg2;
-     cur->regdest   = instruct->regdest;
-     cur->tag       = instruct->tag;
-     cur->rdy1      = false;
-     cur->rdy2      = false;
-     cur->rdydest   = false;
-     cur->valreg1   = cur->reg1;
-     cur->valreg2   = cur->reg2;
-     cur->valdest   = cur->regdest;
-     cur->latency   = instruct->latency;
-     cur->stage     = IF;
+     node *cur2, *temp2;
+     cur2 = (node *)malloc(sizeof(node));
+     cur2->op        = instruct->op;
+     cur2->pc        = instruct->pc;
+     cur2->reg1      = instruct->reg1;
+     cur2->reg2      = instruct->reg2;
+     cur2->regdest   = instruct->regdest;
+     cur2->tag       = instruct->tag;
+     cur2->rdy1      = false;
+     cur2->rdy2      = false;
+     cur2->rdydest   = false;
+     cur2->valreg1   = cur->reg1;
+     cur2->valreg2   = cur->reg2;
+     cur2->valdest   = cur->regdest;
+     cur2->latency   = instruct->latency;
+     cur2->stage     = IF;
  
-     temp = dispatchList;
-     while(temp->next_node!=dispatchList)
-          temp=temp.next_node;
-     temp->next_node=cur;
-     cur->next_node=dispatchList;
+     temp2 = dispatchList;
+     while(temp2->next_node!=dispatchList)
+          temp2=temp2->next_node;
+     temp2->next_node=cur2;
+     cur2->next_node=dispatchList;
      IDcount++;
      timeList[instruct->tag].fetch_start=clock;    
 }
@@ -423,7 +567,11 @@ void advanceCycle(int s){
 }
 
 
-
+void swap(node *x, node *y){
+     node tmp = *x;
+     *x = *y;
+     *y= tmp;
+}
 
 
 
