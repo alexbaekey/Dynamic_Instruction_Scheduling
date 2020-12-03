@@ -5,15 +5,10 @@
 // Out of Order / Dynamic Scheduling simulator
 // Implemention of Tomasulo's algorithm
 
-
 //example of trace instructions
 //2b6420 0 -1 29 14
 //2b6424 2 14 29 -1
 //2b6428 2 15 29 -1
-
-// TODO get rid of node_copy, just do it in place
-
-
 
 // libs
 #include<stdlib.h> 
@@ -24,8 +19,9 @@
 
 // global variables
 int regsize=128;
-
+#define nans -1
 enum state { IF, ID, IS, EX, WB };
+
 bool cycleflag=false;
 int n;
 int m;
@@ -33,15 +29,10 @@ int S;
 int N;
 float IPC;
 int clock = 0;
+int count = 0;
 
-//////////TODO erase if using instruction struct///////////
-/*int pc;*/
-/*int op;*/
-/*int regdest;*/
-/*int reg1;*/
-/*int reg2;*/
-/*int latency;*/
-/*int tag;*/
+// to allocate memory for instruction list
+#define max_trace 1048577
 
 // node structure
 typedef struct node {
@@ -74,6 +65,8 @@ typedef struct instruction {
      int tag;
 }
 instruction;
+
+instruction instructionsList[max_trace];
      
 typedef struct reg_file{
      int rdy;
@@ -95,48 +88,30 @@ typedef struct time{
 }
 time;
      
-
-instruction *instructionsList;
 time *timeList;
-int count = 0;
 
 node *fakeROB; //suggested 1024 entries
-
 node *dispatchList;
 node *issueList;
 node *executeList;
-
 reg_file *regfile;
 
-int IDcount;
-int IScount;
-int EXcount; 
+int IDcount=0;
+int IScount=0;
+int EXcount=0; 
+
 // functions
 void fakeRetire();
 void execute();
 void issue();
 void dispatch();
-void fetch();
-void advanceCycle(int);
+void fetch(instruction *);
+void advanceCycle(int *);
 void node_initialize(node *);
-void node_copy(node *, node *);
 void reg_initialize(reg_file *, int i);
 void instruction_initialize(instruction *);
 void time_initialize(time *);
-void swap(node *, node*);
-
-
-
-
-
-
-
-
-
-
-
-
-
+void swap(node *, node *);
 
 
 int main(int argc, char *argv[]){
@@ -152,16 +127,12 @@ int main(int argc, char *argv[]){
      S     = strtol(argv[1],&ptr,10);
      N     = strtol(argv[2],&ptr,10);
      trace = argv[3];
-
           //initilizations
-     //fake ROB
-     instructionsList = (instruction *)malloc(sizeof(instruction) * S);
      fakeROB       = (node *)malloc(sizeof(node));
      dispatchList  = (node *)malloc(sizeof(node));
      issueList     = (node *)malloc(sizeof(node));
      executeList   = (node *)malloc(sizeof(node));
      regfile       = (reg_file *)malloc(sizeof(reg_file)*regsize);
-     
 
      node_initialize(fakeROB);
      node_initialize(dispatchList);
@@ -182,9 +153,6 @@ int main(int argc, char *argv[]){
      IDcount=0;
      IScount=0;
      EXcount=0;
-     
-
-
      //read file and execute functions on each instruction line
      fp = fopen(trace, "r");
 
@@ -193,8 +161,8 @@ int main(int argc, char *argv[]){
           instructionsList[count].op = op;
           instructionsList[count].pc = pc;
           instructionsList[count].regdest = regdest;
-          instructionsList[count].op = reg1;
-          instructionsList[count].op = reg2;
+          instructionsList[count].reg1 = reg1;
+          instructionsList[count].reg2 = reg2;
           instructionsList[count].tag = count;
           // op type 0, 1 clock cycle
           if(instructionsList[count].op == 0)
@@ -214,7 +182,9 @@ int main(int argc, char *argv[]){
      timeList = (time *)malloc(sizeof(time) * count);
      for(i=0;i<count;i++){
           time_initialize(&timeList[i]);
-     }     
+          timeList[i].tag=i;
+     }   
+
      n=0;
      while(cycleflag==false){
           fakeRetire();
@@ -222,95 +192,75 @@ int main(int argc, char *argv[]){
           issue();
           dispatch();
           m=0;
-          //fetch conditions
           while(n<count && m<N && IDcount<(2*N)){
-               fetch(&instructionsList[i]);
+               fetch(&instructionsList[n]);
                n++;
                m++;
           }
-     advanceCycle(n);
+     advanceCycle(&n);
      }     
-          
+
      //prints
+     clock--;
      IPC = ((float)(count)/(float)(clock));  
      printf("number of instructions = %d\n", count);
      printf("number of cycles = %d\n", clock);
-     printf("IPC = %.2f", IPC);
+     printf("IPC = %.5f\n", IPC);
 
      return 0;
-
 }
 
 
 void node_initialize(node *A){
-     A->op       = -INFINITY;
-     A->pc       = -INFINITY;
-     A->regdest  = -INFINITY;
-     A->reg1     = -INFINITY;
-     A->reg2     = -INFINITY;
-     A->rdydest  = -INFINITY;
-     A->rdy1     = -INFINITY;
-     A->rdy2     = -INFINITY;
-     A->latency  = -INFINITY;
-     A->tag      = -INFINITY;
+     A->op       = nans;
+     A->pc       = nans;
+     A->regdest  = nans;
+     A->reg1     = nans;
+     A->reg2     = nans;
+     A->rdydest  = 0;
+     A->rdy1     = 0;
+     A->rdy2     = 0;
+     A->latency  = nans;
+     A->tag      = nans;
+     A->stage    = nans;
+     A->valdest  = A->regdest;
+     A->valreg1  = A->reg1;
+     A->valreg2  = A->reg2;
 }
      
 void reg_initialize(reg_file *A, int i){
-          A->rdy = true;
+          A->rdy = 1;
           A->tag = i;
 }
 
 void instruction_initialize(instruction *A){
-     A->op        = -INFINITY;
-     A->pc        = -INFINITY;
-     A->regdest   = -INFINITY;
-     A->reg1      = -INFINITY;
-     A->reg2      = -INFINITY;
-     A->latency   = -INFINITY;
-     A->tag       = -INFINITY;
+     A->op        = nans;
+     A->pc        = nans;
+     A->regdest   = nans;
+     A->reg1      = nans;
+     A->reg2      = nans;
+     A->tag       = nans;
 }
 
 void time_initialize(time *A){
-     A->tag                 = -INFINITY;
-     A->fetch_start         = -INFINITY;
-     A->fetch_length        = -INFINITY;
-     A->issue_start         = -INFINITY;
-     A->issue_length        = -INFINITY;
-     A->execute_start       = -INFINITY;
-     A->execute_length      = -INFINITY;
-     A->writeback_start     = -INFINITY;
-     A->writeback_length    = -INFINITY;
+     A->fetch_start         = nans;
+     A->fetch_length        = nans;
+     A->issue_start         = nans;
+     A->issue_length        = nans;
+     A->execute_start       = nans;
+     A->execute_length      = nans;
+     A->writeback_start     = nans;
+     A->writeback_length    = nans;
 }
-
-
-void node_copy(node *B, node *A){
-     //B is target, A is source
-     B->op       = A->op;     
-     B->pc       = A->pc;
-     B->regdest  = A->regdest; 
-     B->reg1     = A->reg1;
-     B->reg2     = A->reg2;
-     B->rdydest  = A->rdydest;
-     B->rdy1     = A->rdy1;
-     B->rdy2     = A->rdy2;
-     B->latency  = A->latency;
-     B->tag      = A->tag;
-}
-
-
-
-
-
-
 
 void fakeRetire(){
+
      node *cur;
      cur = fakeROB->next_node;
-     while(cur!=fakeROB){
-          if(cur->stage==WB){
+     while(cur != fakeROB){
+          if(cur->stage == WB)
                timeList[cur->tag].writeback_length=1;
-          }
-          cur=cur->next_node;
+          cur = cur->next_node;
      }
      cur=fakeROB->next_node;
      while(cur!=fakeROB){
@@ -335,7 +285,7 @@ void fakeRetire(){
                     timeList[t].writeback_length);
                cur=cur->next_node;
           }
-          else
+          else if(cur->stage != WB)
                break;
      }
 }
@@ -349,7 +299,7 @@ void execute(){
      A = executeList->next_node;
      while(A != executeList){
           A->latency--;
-          temp=fakeROB;
+          temp=fakeROB->next_node;
           while(temp!=fakeROB){
                if(temp->tag==A->tag){
                     temp->latency--;
@@ -358,35 +308,30 @@ void execute(){
                temp=temp->next_node;
           }
           A=A->next_node;
-          
      }
      
      A=executeList->next_node;
      B=NULL;
-     while(A!=executeList){
-          if(A->op==0){
+     while(A != executeList){
+          if(A->latency == 0){
                temp=fakeROB->next_node;
-               while(temp!=fakeROB){
-                    if(temp->tag==A->tag){
+               while(temp != fakeROB){
+                    if(temp->tag == A->tag){
                          temp->stage=WB;
-                         if(temp->op==1){
+                         if(temp->op==0)
                               timeList[temp->tag].execute_length=1;
-                         }
-                         else if(temp->op==2){
+                         else if(temp->op==1)
                               timeList[temp->tag].execute_length=2;
-                         }
-                         else if(temp->op==5){
+                         else if(temp->op==2)
                               timeList[temp->tag].execute_length=5;
-                         }
+                         timeList[temp->tag].writeback_start=clock;
                     }
                     temp = temp->next_node;
                }
-               if(!B){
+               if(!B)
                     executeList->next_node=A->next_node;
-               }
-               else{
+               else
                     B->next_node=A->next_node;
-               }
                
                if(regfile[A->regdest].rdy == 0 && regfile[A->regdest].tag == A->tag){
                     regfile[A->regdest].rdy=1;
@@ -409,14 +354,14 @@ void execute(){
           }
           B=A;
           A=A->next_node;
-     }              
+     }       
 }
+
 
 void issue(){
 //part of issue/execute pipeline
 
-     int c=0;
-     //temp
+     int i=0;
      int ct=0;   
 
      node *tempList;
@@ -425,18 +370,120 @@ void issue(){
      node *temp;
 
      tempList = (node *)malloc(sizeof(node) * IScount);
-     for(c=0;c<IScount;c++)
-          node_initialize(&tempList[c]);
+     for(i=0;i<IScount;i++)
+          node_initialize(&tempList[i]);
      temp = issueList->next_node;
-     for(c=0;c<IScount;c++){
+
+     for(i=0;i<IScount;i++){
           if(temp->stage==IS && temp->rdy1==1 && temp->rdy2==1){
-               node_copy(&tempList[ct],temp);
+               tempList[ct].op       = temp->op;     
+               tempList[ct].pc       = temp->pc;
+               tempList[ct].regdest  = temp->regdest; 
+               tempList[ct].reg1     = temp->reg1;
+               tempList[ct].reg2     = temp->reg2;
+               tempList[ct].rdydest  = temp->rdydest;
+               tempList[ct].rdy1     = temp->rdy1;
+               tempList[ct].rdy2     = temp->rdy2;
+               tempList[ct].latency  = temp->latency;
+               tempList[ct].tag      = temp->tag;
+               tempList[ct].stage    = temp->stage;
+
                ct++;
           }
           temp=temp->next_node;
      }
 
      //sort temp list (bubble sort)
+
+     i=0;
+     int j=0;
+
+     for(i=0;i<ct-1;i++){
+          for(j=0;j<ct-i-1;j++){
+               if(tempList[j].tag>tempList[j+1].tag){
+                    swap(&tempList[j],&tempList[j+1]);
+               }
+          }
+     }
+
+     i=0;
+     EXcount=0;
+     while(i<ct && EXcount<N){
+          A=issueList->next_node;
+          B=NULL;
+          while(A != issueList){
+               if(A->tag == tempList[i].tag){
+                    if(!B){
+                         issueList->next_node = A->next_node;
+                    }
+                    else{
+                         B->next_node = A->next_node;
+                    }
+                    break;
+               }
+               B=A;
+               A = A->next_node;
+          }
+
+          temp=executeList;
+          while(temp->next_node != executeList)
+               temp = temp->next_node;
+          temp->next_node = A;
+          A->next_node = executeList;
+          EXcount++;
+          IScount--;
+          A->stage=EX;
+          temp=fakeROB->next_node;
+          while(temp != fakeROB){
+               if(temp->tag == A->tag){
+                    temp->stage=EX;
+                    break;
+               }
+               temp = temp->next_node;
+          }
+          timeList[A->tag].issue_length = clock - timeList[A->tag].issue_start;
+          timeList[A->tag].execute_start = clock;
+          i++;
+     }
+     free(tempList);
+}
+       
+
+void dispatch(){
+//part of fetch/dispatch pipeline
+
+     node *tempList;
+     node *A;
+     node *B;
+     node *temp;
+     int ct=0;
+
+     tempList = (node *)malloc(sizeof(node) * IDcount);
+     for(int w=0;w<IDcount;w++){
+          node_initialize(&tempList[w]);
+     }
+     temp=dispatchList->next_node;
+     ct=0;
+     for(int z=0;z<IDcount;z++){
+          if(temp->stage == ID){
+               tempList[ct].op       = temp->op;     
+               tempList[ct].pc       = temp->pc;
+               tempList[ct].regdest  = temp->regdest; 
+               tempList[ct].reg1     = temp->reg1;
+               tempList[ct].reg2     = temp->reg2;
+               tempList[ct].rdydest  = temp->rdydest;
+               tempList[ct].rdy1     = temp->rdy1;
+               tempList[ct].rdy2     = temp->rdy2;
+               tempList[ct].latency  = temp->latency;
+               tempList[ct].tag      = temp->tag;
+               tempList[ct].stage    = temp->stage;
+
+               ct++;
+          }
+          temp=temp->next_node;
+     }
+     
+     //bub sort
 
      int i=0;
      int j=0;
@@ -448,69 +495,127 @@ void issue(){
                }
           }
      }
-     c=0;
-     EXcount=0;
-     while(i<ct && EXcount<N){
-          A=issueList->next_node;
+
+     int v=0;
+     while(v<ct && IScount<S){
+          A=dispatchList->next_node;
           B=NULL;
-          while(A!=issueList){
-               if(A->tag==tempList[c].tag){
+          while(A != dispatchList){
+               if(A->tag == tempList[v].tag){
                     if(!B)
-                         issueList->next_node=A->next_node;
+                         dispatchList->next_node=A->next_node;
                     else
-                         B->next_node=A->next_node;
+                         B->next_node = A->next_node;
                     break;
                }
                B=A;
                A=A->next_node;
           }
-          temp=executeList;
-          while(temp->next_node!=executeList)
+
+          temp=issueList;
+          while(temp->next_node != issueList)
                temp=temp->next_node;
           temp->next_node=A;
-          A->next_node=executeList;
-          EXcount++;
-          IScount--;
-          A->stage=EX;
+          A->next_node=issueList;
+
+          IScount++;
+          IDcount--;
+
+          A->stage=IS;
           temp=fakeROB->next_node;
-          while(temp!=fakeROB){
+
+          while(temp != fakeROB){
                if(temp->tag==A->tag){
-                    temp->stage=EX;
+                    temp->stage=IS;
                     break;
                }
-               temp = temp->next_node;
+               temp=temp->next_node;
           }
-          timeList[A->tag].issue_length=clock-timeList[A->tag].issue_start;
-          timeList[A->tag].execute_start=clock;
-          c++;
+
+          timeList[A->tag].dispatch_length = clock - timeList[A->tag].dispatch_start;
+          timeList[A->tag].issue_start = clock;
+
+
+          //Renamings
+          if(A->reg1 == nans){
+               A->rdy1=1;
+               A->valreg1=nans;
+          }
+          else{
+               if(regfile[A->reg1].rdy==1){
+                    A->rdy1=1;
+                    A->valreg1=regfile[A->reg1].tag;
+               }
+               else if(regfile[A->reg1].rdy==0){
+                    A->rdy1=0;
+                    A->valreg1=regfile[A->reg1].tag;
+               }
+          }
+
+
+          if(A->reg2 == nans){
+               A->rdy2=1;
+               A->valreg2=nans;
+          }
+          else{
+               if(regfile[A->reg2].rdy==1){
+                    A->rdy2=1;
+                    A->valreg2=regfile[A->reg2].tag;
+               }
+               else if(regfile[A->reg2].rdy==0){
+                    A->rdy2=0;
+                    A->valreg2=regfile[A->reg2].tag;
+               }
+          }
+
+          if(A->regdest == nans){
+               A->rdydest=1;
+               A->valdest=nans;
+          }
+          else{
+               regfile[A->regdest].rdy=0;
+               regfile[A->regdest].tag=A->tag;
+          }
+          v++;
+     }
+
+     // IFs in dispatchList moved to ID
+     A = dispatchList->next_node;
+     while(A != dispatchList){
+          if(A->stage == IF){
+               A->stage = ID;
+               temp = fakeROB->next_node;
+               while(temp!=fakeROB){
+                    if(temp->tag==A->tag){
+                         temp->stage=ID;
+                         timeList[A->tag].fetch_length=clock-timeList[A->tag].fetch_start;
+                         timeList[A->tag].dispatch_start = clock;
+                         A=A->next_node;
+                         continue;
+                    }
+                    temp=temp->next_node;
+               }
+          }
+          A=A->next_node;
      }
      free(tempList);
-}
-       
-
-
-
-
-
-
-void dispatch(){
-//part of fetch/dispatch pipeline
-;
 }
 
 void fetch(instruction *instruct){
 //part of fetch/dispatch pipeline
-     node *cur, *temp;
+
+     node *cur=0, *temp=0;
      cur = (node *)malloc(sizeof(node));
+
      cur->op        = instruct->op;
      cur->pc        = instruct->pc;
      cur->reg1      = instruct->reg1;
      cur->reg2      = instruct->reg2;
      cur->regdest   = instruct->regdest;
      cur->tag       = instruct->tag;
-     cur->rdy1      = false;
-     cur->rdy2      = false;
-     cur->rdydest   = false;
+     cur->rdy1      = 0;
+     cur->rdy2      = 0;
+     cur->rdydest   = 0;
      cur->valreg1   = cur->reg1;
      cur->valreg2   = cur->reg2;
      cur->valdest   = cur->regdest;
@@ -518,22 +623,24 @@ void fetch(instruction *instruct){
      cur->stage     = IF;
 
      temp = fakeROB;
-     while(temp->next_node!=fakeROB)
+     while(temp->next_node != fakeROB){
           temp = temp->next_node;
+     }
      temp->next_node=cur;
      cur->next_node=fakeROB;
 
      node *cur2, *temp2;
      cur2 = (node *)malloc(sizeof(node));
+
      cur2->op        = instruct->op;
      cur2->pc        = instruct->pc;
      cur2->reg1      = instruct->reg1;
      cur2->reg2      = instruct->reg2;
      cur2->regdest   = instruct->regdest;
      cur2->tag       = instruct->tag;
-     cur2->rdy1      = false;
-     cur2->rdy2      = false;
-     cur2->rdydest   = false;
+     cur2->rdy1      = 0;
+     cur2->rdy2      = 0;
+     cur2->rdydest   = 0;
      cur2->valreg1   = cur->reg1;
      cur2->valreg2   = cur->reg2;
      cur2->valdest   = cur->regdest;
@@ -541,41 +648,36 @@ void fetch(instruction *instruct){
      cur2->stage     = IF;
  
      temp2 = dispatchList;
-     while(temp2->next_node!=dispatchList)
-          temp2=temp2->next_node;
+     while(temp2->next_node != dispatchList)
+          temp2 = temp2->next_node;
      temp2->next_node=cur2;
      cur2->next_node=dispatchList;
      IDcount++;
      timeList[instruct->tag].fetch_start=clock;    
 }
 
-
-
-
-void advanceCycle(int s){
+void advanceCycle(int *s1){
      clock++;
-     if((s>=count) && (fakeROB->next_node == fakeROB))
+     if(*s1>=count && fakeROB->next_node == fakeROB){
           cycleflag = true;
-     else if((s<count) && (fakeROB->next_node == fakeROB))
+     }
+     else if(*s1<count && fakeROB->next_node == fakeROB){
           cycleflag = false;
-     else if((s>=count) && (fakeROB->next_node != fakeROB))
+     }
+     else if(*s1>=count && fakeROB->next_node != fakeROB){
           cycleflag = false;
-     else if((s<count) && (fakeROB->next_node != fakeROB))
+     }
+     else if(*s1<count && fakeROB->next_node != fakeROB){
           cycleflag = false;
-     else
+     }
+     else{
           cycleflag = true; 
+     }      
 }
-
 
 void swap(node *x, node *y){
      node tmp = *x;
      *x = *y;
      *y= tmp;
 }
-
-
-
-     
-
-
 
