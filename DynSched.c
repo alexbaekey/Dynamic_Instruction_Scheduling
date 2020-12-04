@@ -417,7 +417,7 @@ void issue(){
      i=0;
      EXcount=0;
 
-     while(i<ct && EXcount<N){
+     while(i<ct && EXcount<(N+1)){
           A=issueList->next_node;
           B=NULL;
           while(A!=issueList){
@@ -686,4 +686,5 @@ void swap(node *x, node *y){
      *x = *y;
      *y= tmp;
 }
+
 
