@@ -10000,4 +10000,4 @@
 9999 fu{0} src{7,-1} dst{2} IF{9999,1} ID{10000,1} IS{10001,5} EX{10006,1} WB{10007,1}
 number of instructions = 10000
 number of cycles       = 10008
-IPC                    = 0.999201
+IPC                    = 0.99920
